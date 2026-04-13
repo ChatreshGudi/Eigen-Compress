@@ -15,6 +15,18 @@ def calculate_mse(img1, img2):
     """Calculates Mean Squared Error between two image arrays."""
     return np.mean((img1 - img2) ** 2)
 
+def delta_encode(matrix, axis=0):
+    """Pre-conditions signals into zero-heavy deltas for extreme Zlib matching."""
+    deltas = np.diff(matrix.astype(int), axis=axis).astype(np.int8)
+    if axis == 0:
+        return np.vstack((matrix[0:1, :], deltas))
+    else:
+        return np.hstack((matrix[:, 0:1], deltas))
+
+def delta_decode(matrix, axis=0):
+    """Restores the exact matrix from its delta map exploiting two's complement cumsum."""
+    return np.cumsum(matrix, axis=axis, dtype=np.int8)
+
 def quantize_factors(U, S, Vt):
     """
     Intelligently maps [-1.0, 1.0] factors into the full 8-bit dynamic range
@@ -31,10 +43,14 @@ def quantize_factors(U, S, Vt):
     scale_Vt = 127.0 / max_Vt
     Vt_q = np.clip(np.round(Vt * scale_Vt), -127, 127).astype(np.int8)
     
+    # Delta Encode to feed smarter inputs into ZIP deflater
+    U_enc = delta_encode(U_q, axis=0)
+    Vt_enc = delta_encode(Vt_q, axis=1)
+    
     # Absorb the scales into S so we don't need to save them separately
     S_new = (S / (scale_U * scale_Vt)).astype(np.float32)
     
-    return U_q, S_new, Vt_q
+    return U_enc, S_new, Vt_enc
 
 def calculate_psnr(img1, img2):
     """Calculates Peak Signal-to-Noise Ratio."""
@@ -280,12 +296,12 @@ with tab2:
                 st.info(f"Successfully loaded a **{mode}** archive. Embedded Rank Constraint: $k={k_val}$")
                 
                 if mode == 'color':
-                    comp_r = compress_matrix(data['U_r'].astype(np.float32), data['S_r'], data['Vt_r'].astype(np.float32), k_val)
-                    comp_g = compress_matrix(data['U_g'].astype(np.float32), data['S_g'], data['Vt_g'].astype(np.float32), k_val)
-                    comp_b = compress_matrix(data['U_b'].astype(np.float32), data['S_b'], data['Vt_b'].astype(np.float32), k_val)
+                    comp_r = compress_matrix(delta_decode(data['U_r'], axis=0).astype(np.float32), data['S_r'], delta_decode(data['Vt_r'], axis=1).astype(np.float32), k_val)
+                    comp_g = compress_matrix(delta_decode(data['U_g'], axis=0).astype(np.float32), data['S_g'], delta_decode(data['Vt_g'], axis=1).astype(np.float32), k_val)
+                    comp_b = compress_matrix(delta_decode(data['U_b'], axis=0).astype(np.float32), data['S_b'], delta_decode(data['Vt_b'], axis=1).astype(np.float32), k_val)
                     restored_image = np.stack([comp_r, comp_g, comp_b], axis=-1)
                 else:
-                    restored_image = compress_matrix(data['U'].astype(np.float32), data['S'], data['Vt'].astype(np.float32), k_val)
+                    restored_image = compress_matrix(delta_decode(data['U'], axis=0).astype(np.float32), data['S'], delta_decode(data['Vt'], axis=1).astype(np.float32), k_val)
 
                 st.subheader("Mathematically Reconstructed Frame")
                 st.image(restored_image, use_container_width=True)
